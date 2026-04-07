@@ -128,6 +128,12 @@ h1 {
     gap: 1rem;
 }
 
+.card-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+}
+
 .card,
 .info-block {
     padding: 1rem;
