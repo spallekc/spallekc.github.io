@@ -47,6 +47,7 @@
     <div class="controls">
         <label>k: <input id="kInput" type="number" min="1" max="12" value="3"></label>
         <button id="toggleBtn">Grenzen anzeigen</button>
+        <button id="clusterViewBtn">Clustering ausblenden</button>
         <button id="resetBtn">Reset</button>
     </div>
     <canvas id="canvas" width="900" height="520"></canvas>
@@ -56,9 +57,11 @@
         const kInput = document.getElementById('kInput');
         const resetBtn = document.getElementById('resetBtn');
         const toggleBtn = document.getElementById('toggleBtn');
+        const clusterViewBtn = document.getElementById('clusterViewBtn');
 
         let points = [];
         let showBoundaries = false;
+        let hideClustering = false;
         let lastCenters = null;
 
         const colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#a65628', '#f781bf', '#999999', '#17becf', '#bcbd22', '#d62728', '#1f77b4'];
@@ -281,21 +284,24 @@
         function render() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const centers = kmeans();
+            const showClustering = !hideClustering;
 
-            if (showBoundaries) {
+            if (showBoundaries && showClustering) {
                 fillClusterAreas(centers);
                 drawBoundaries(centers);
             }
 
             for (const p of points) {
                 const ci = centers[p.cluster] ? centers[p.cluster].colorIndex : 0;
-                ctx.fillStyle = colors[ci % colors.length];
+                ctx.fillStyle = showClustering ? colors[ci % colors.length] : '#000';
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
                 ctx.fill();
             }
 
-            centers.forEach(c => drawX(c.x, c.y, colors[c.colorIndex % colors.length]));
+            if (showClustering) {
+                centers.forEach(c => drawX(c.x, c.y, colors[c.colorIndex % colors.length]));
+            }
         }
 
         canvas.addEventListener('click', e => {
@@ -310,6 +316,12 @@
         toggleBtn.addEventListener('click', () => {
             showBoundaries = !showBoundaries;
             toggleBtn.textContent = showBoundaries ? 'Grenzen ausblenden' : 'Grenzen anzeigen';
+            render();
+        });
+
+        clusterViewBtn.addEventListener('click', () => {
+            hideClustering = !hideClustering;
+            clusterViewBtn.textContent = hideClustering ? 'Clustering anzeigen' : 'Clustering ausblenden';
             render();
         });
 
