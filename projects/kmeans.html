@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>k-Means Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px
+        }
+
+        input {
+            width: 60px;
+            padding: 5px
+        }
+
+        button {
+            padding: 6px 10px;
+            cursor: pointer
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            border: 1px solid #999;
+            background: #fff
+        }
+    </style>
+</head>
+
+<body>
+    <div class="controls">
+        <label>k: <input id="kInput" type="number" min="1" max="12" value="3"></label>
+        <button id="toggleBtn">Grenzen anzeigen</button>
+        <button id="resetBtn">Reset</button>
+    </div>
+    <canvas id="canvas" width="900" height="520"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const kInput = document.getElementById('kInput');
+        const resetBtn = document.getElementById('resetBtn');
+        const toggleBtn = document.getElementById('toggleBtn');
+
+        let points = [];
+        let showBoundaries = false;
+        let lastCenters = null;
+
+        const colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#a65628', '#f781bf', '#999999', '#17becf', '#bcbd22', '#d62728', '#1f77b4'];
+        const minCanvasWidth = 320;
+        const minCanvasHeight = 260;
+
+        function getK() { return Math.max(1, Math.min(12, parseInt(kInput.value) || 1)); }
+        function dist(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
+
+        function scaleItems(items, scaleX, scaleY) {
+            if (!items) return;
+            for (const item of items) {
+                item.x *= scaleX;
+                item.y *= scaleY;
+            }
+        }
+
+        function resizeCanvas() {
+            const oldWidth = canvas.width;
+            const oldHeight = canvas.height;
+            const controlsHeight = document.querySelector('.controls').offsetHeight;
+            const horizontalPadding = 40;
+            const verticalPadding = 70;
+            const nextWidth = Math.max(minCanvasWidth, Math.floor(window.innerWidth - horizontalPadding));
+            const nextHeight = Math.max(minCanvasHeight, Math.floor(window.innerHeight - controlsHeight - verticalPadding));
+
+            if (oldWidth === nextWidth && oldHeight === nextHeight) return;
+
+            canvas.width = nextWidth;
+            canvas.height = nextHeight;
+
+            if (oldWidth > 0 && oldHeight > 0) {
+                const scaleX = nextWidth / oldWidth;
+                const scaleY = nextHeight / oldHeight;
+                scaleItems(points, scaleX, scaleY);
+                scaleItems(lastCenters, scaleX, scaleY);
+            }
+
+            render();
+        }
+
+        function initCenters(k) {
+            const centers = [];
+            const used = new Set();
+            let colorIndex = 0;
+            while (centers.length < k) {
+                if (points.length === 0) {
+                    centers.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, colorIndex: colorIndex++ });
+                } else {
+                    const i = Math.floor(Math.random() * points.length);
+                    if (!used.has(i)) {
+                        used.add(i);
+                        centers.push({ x: points[i].x, y: points[i].y, colorIndex: colorIndex++ });
+                    }
+                }
+            }
+            return centers;
+        }
+
+        function kmeans() {
+            if (points.length === 0) return [];
+            const k = Math.min(getK(), points.length);
+            let centers = lastCenters && lastCenters.length === k ? lastCenters : initCenters(k);
+
+            for (let iter = 0; iter < 20; iter++) {
+                for (const p of points) {
+                    let best = 0, bestD = Infinity;
+                    for (let i = 0; i < centers.length; i++) {
+                        const d = dist(p, centers[i]);
+                        if (d < bestD) { bestD = d; best = i; }
+                    }
+                    p.cluster = best;
+                }
+
+                const sums = Array.from({ length: k }, () => ({ x: 0, y: 0, n: 0 }));
+                for (const p of points) {
+                    const s = sums[p.cluster];
+                    s.x += p.x; s.y += p.y; s.n++;
+                }
+
+                let moved = false;
+                for (let i = 0; i < k; i++) {
+                    if (sums[i].n > 0) {
+                        const nx = sums[i].x / sums[i].n;
+                        const ny = sums[i].y / sums[i].n;
+                        if (Math.abs(nx - centers[i].x) > 0.5 || Math.abs(ny - centers[i].y) > 0.5) moved = true;
+                        centers[i].x = nx;
+                        centers[i].y = ny;
+                    }
+                }
+                if (!moved) break;
+            }
+
+            lastCenters = centers;
+            return centers;
+        }
+
+        function clipPolygon(polygon, normalX, normalY, limit) {
+            const clipped = [];
+            if (polygon.length === 0) return clipped;
+
+            for (let i = 0; i < polygon.length; i++) {
+                const current = polygon[i];
+                const previous = polygon[(i + polygon.length - 1) % polygon.length];
+                const currentInside = normalX * current.x + normalY * current.y <= limit + 1e-6;
+                const previousInside = normalX * previous.x + normalY * previous.y <= limit + 1e-6;
+
+                if (currentInside !== previousInside) {
+                    const edgeX = current.x - previous.x;
+                    const edgeY = current.y - previous.y;
+                    const denominator = normalX * edgeX + normalY * edgeY;
+                    if (Math.abs(denominator) > 1e-9) {
+                        const t = (limit - normalX * previous.x - normalY * previous.y) / denominator;
+                        clipped.push({
+                            x: previous.x + edgeX * t,
+                            y: previous.y + edgeY * t
+                        });
+                    }
+                }
+
+                if (currentInside) clipped.push(current);
+            }
+
+            return clipped;
+        }
+
+        function getVoronoiCell(centers, centerIndex) {
+            const center = centers[centerIndex];
+            let polygon = [
+                { x: 0, y: 0 },
+                { x: canvas.width, y: 0 },
+                { x: canvas.width, y: canvas.height },
+                { x: 0, y: canvas.height }
+            ];
+
+            for (let i = 0; i < centers.length; i++) {
+                if (i === centerIndex) continue;
+
+                const other = centers[i];
+                const normalX = other.x - center.x;
+                const normalY = other.y - center.y;
+                const limit = (other.x * other.x + other.y * other.y - center.x * center.x - center.y * center.y) / 2;
+                polygon = clipPolygon(polygon, normalX, normalY, limit);
+
+                if (polygon.length === 0) break;
+            }
+
+            return polygon;
+        }
+
+        function isCanvasEdge(a, b) {
+            const tolerance = 1e-3;
+            return (
+                (Math.abs(a.x) < tolerance && Math.abs(b.x) < tolerance) ||
+                (Math.abs(a.x - canvas.width) < tolerance && Math.abs(b.x - canvas.width) < tolerance) ||
+                (Math.abs(a.y) < tolerance && Math.abs(b.y) < tolerance) ||
+                (Math.abs(a.y - canvas.height) < tolerance && Math.abs(b.y - canvas.height) < tolerance)
+            );
+        }
+
+        function getEdgeKey(a, b) {
+            const first = `${a.x.toFixed(3)},${a.y.toFixed(3)}`;
+            const second = `${b.x.toFixed(3)},${b.y.toFixed(3)}`;
+            return first < second ? `${first}|${second}` : `${second}|${first}`;
+        }
+
+        function fillClusterAreas(centers) {
+            for (let i = 0; i < centers.length; i++) {
+                const cell = getVoronoiCell(centers, i);
+                if (cell.length < 3) continue;
+
+                ctx.fillStyle = `${colors[centers[i].colorIndex % colors.length]}1a`;
+                ctx.beginPath();
+                ctx.moveTo(cell[0].x, cell[0].y);
+                for (let j = 1; j < cell.length; j++) {
+                    ctx.lineTo(cell[j].x, cell[j].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        function drawBoundaries(centers) {
+            if (centers.length < 2) return;
+
+            const drawnEdges = new Set();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1.5;
+
+            for (let i = 0; i < centers.length; i++) {
+                const cell = getVoronoiCell(centers, i);
+                for (let j = 0; j < cell.length; j++) {
+                    const start = cell[j];
+                    const end = cell[(j + 1) % cell.length];
+                    if (isCanvasEdge(start, end)) continue;
+
+                    const edgeKey = getEdgeKey(start, end);
+                    if (drawnEdges.has(edgeKey)) continue;
+                    drawnEdges.add(edgeKey);
+
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.lineTo(end.x, end.y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function drawX(x, y, color) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x - 6, y - 6);
+            ctx.lineTo(x + 6, y + 6);
+            ctx.moveTo(x + 6, y - 6);
+            ctx.lineTo(x - 6, y + 6);
+            ctx.stroke();
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const centers = kmeans();
+
+            if (showBoundaries) {
+                fillClusterAreas(centers);
+                drawBoundaries(centers);
+            }
+
+            for (const p of points) {
+                const ci = centers[p.cluster] ? centers[p.cluster].colorIndex : 0;
+                ctx.fillStyle = colors[ci % colors.length];
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            centers.forEach(c => drawX(c.x, c.y, colors[c.colorIndex % colors.length]));
+        }
+
+        canvas.addEventListener('click', e => {
+            const r = canvas.getBoundingClientRect();
+            points.push({ x: e.clientX - r.left, y: e.clientY - r.top, cluster: 0 });
+            render();
+        });
+
+        kInput.addEventListener('input', render);
+        kInput.addEventListener('change', render);
+
+        toggleBtn.addEventListener('click', () => {
+            showBoundaries = !showBoundaries;
+            toggleBtn.textContent = showBoundaries ? 'Grenzen ausblenden' : 'Grenzen anzeigen';
+            render();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            points = [];
+            lastCenters = null;
+            render();
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        resizeCanvas();
+    </script>
+</body>
+
+</html>
