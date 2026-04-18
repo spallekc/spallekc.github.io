@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lineare SVM Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .palette {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .swatch {
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border-radius: 999px;
+            border: 2px solid transparent;
+            cursor: pointer;
+        }
+
+        .swatch.active {
+            border-color: #000;
+        }
+
+        button {
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            background: #fff;
+        }
+
+        @media (max-width: 720px) {
+            body {
+                margin: 12px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="controls">
+        <div id="palette" class="palette"></div>
+        <button id="toggleBtn">Farben ausblenden</button>
+        <button id="resetBtn">Reset</button>
+    </div>
+    <canvas id="canvas" width="900" height="520"></canvas>
+
+    <script>
+        const classDefs = [
+            { label: 'Rot', color: '#e41a1c' },
+            { label: 'Blau', color: '#377eb8' },
+            { label: 'Gruen', color: '#4daf4a' },
+            { label: 'Lila', color: '#984ea3' },
+            { label: 'Orange', color: '#ff7f00' },
+            { label: 'Pink', color: '#f781bf' }
+        ];
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const palette = document.getElementById('palette');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const resetBtn = document.getElementById('resetBtn');
+
+        const minCanvasWidth = 320;
+        const minCanvasHeight = 260;
+        const regionStep = 8;
+
+        let points = [];
+        let activeClass = 0;
+        let showColors = true;
+
+        function createPalette() {
+            classDefs.forEach((classDef, index) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'swatch';
+                button.style.background = classDef.color;
+                button.title = classDef.label;
+                button.setAttribute('aria-label', classDef.label);
+                button.addEventListener('click', () => {
+                    activeClass = index;
+                    updatePaletteSelection();
+                });
+                palette.appendChild(button);
+            });
+            updatePaletteSelection();
+        }
+
+        function updatePaletteSelection() {
+            [...palette.children].forEach((button, index) => {
+                button.classList.toggle('active', index === activeClass);
+            });
+        }
+
+        function scaleItems(items, scaleX, scaleY) {
+            for (const item of items) {
+                item.x *= scaleX;
+                item.y *= scaleY;
+            }
+        }
+
+        function resizeCanvas() {
+            const oldWidth = canvas.width;
+            const oldHeight = canvas.height;
+            const controlsHeight = document.querySelector('.controls').offsetHeight;
+            const horizontalPadding = 40;
+            const verticalPadding = 70;
+            const nextWidth = Math.max(minCanvasWidth, Math.floor(window.innerWidth - horizontalPadding));
+            const nextHeight = Math.max(minCanvasHeight, Math.floor(window.innerHeight - controlsHeight - verticalPadding));
+
+            if (oldWidth === nextWidth && oldHeight === nextHeight) return;
+
+            canvas.width = nextWidth;
+            canvas.height = nextHeight;
+
+            if (oldWidth > 0 && oldHeight > 0) {
+                scaleItems(points, nextWidth / oldWidth, nextHeight / oldHeight);
+            }
+
+            render();
+        }
+
+        function normalizePoint(x, y) {
+            return {
+                x: (x / canvas.width) * 2 - 1,
+                y: (y / canvas.height) * 2 - 1
+            };
+        }
+
+        function trainBinarySvm(samples, positiveClass) {
+            let weightX = 0;
+            let weightY = 0;
+            let bias = 0;
+            const lambda = 0.0025;
+            const penalty = 0.85;
+            const positiveCount = samples.filter(sample => sample.label === positiveClass).length;
+            const negativeCount = samples.length - positiveCount;
+
+            if (positiveCount === 0 || negativeCount === 0) {
+                return { weightX, weightY, bias };
+            }
+
+            const positiveWeight = negativeCount / positiveCount;
+            const negativeWeight = positiveCount / negativeCount;
+            const epochs = Math.min(1400, Math.max(360, samples.length * 16));
+
+            for (let epoch = 0; epoch < epochs; epoch++) {
+                const learningRate = 0.075 / (1 + epoch * 0.018);
+
+                for (let index = 0; index < samples.length; index++) {
+                    const sample = samples[(index + epoch) % samples.length];
+                    const target = sample.label === positiveClass ? 1 : -1;
+                    const sampleWeight = target === 1 ? positiveWeight : negativeWeight;
+                    const score = weightX * sample.nx + weightY * sample.ny + bias;
+                    const margin = target * score;
+
+                    weightX *= 1 - learningRate * lambda;
+                    weightY *= 1 - learningRate * lambda;
+
+                    if (margin < 1) {
+                        const scaled = learningRate * penalty * sampleWeight * target;
+                        weightX += scaled * sample.nx;
+                        weightY += scaled * sample.ny;
+                        bias += scaled;
+                    }
+                }
+            }
+
+            return { weightX, weightY, bias };
+        }
+
+        function getTrainingState() {
+            const counts = Array(classDefs.length).fill(0);
+            const samples = points.map(point => {
+                counts[point.label]++;
+                const normalized = normalizePoint(point.x, point.y);
+                return { ...point, nx: normalized.x, ny: normalized.y };
+            });
+
+            const activeClasses = counts
+                .map((count, index) => ({ count, index }))
+                .filter(entry => entry.count > 0)
+                .map(entry => entry.index);
+
+            const models = new Map();
+            activeClasses.forEach(classIndex => {
+                models.set(classIndex, trainBinarySvm(samples, classIndex));
+            });
+
+            return { counts, samples, activeClasses, models };
+        }
+
+        function predictClass(trainingState, x, y) {
+            if (trainingState.activeClasses.length === 0) return null;
+            if (trainingState.activeClasses.length === 1) return trainingState.activeClasses[0];
+
+            const normalized = normalizePoint(x, y);
+            let bestClass = trainingState.activeClasses[0];
+            let bestScore = -Infinity;
+
+            for (const classIndex of trainingState.activeClasses) {
+                const model = trainingState.models.get(classIndex);
+                const score = model.weightX * normalized.x + model.weightY * normalized.y + model.bias;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestClass = classIndex;
+                }
+            }
+
+            return bestClass;
+        }
+
+        function drawRegions(trainingState) {
+            const cols = Math.ceil(canvas.width / regionStep);
+            const rows = Math.ceil(canvas.height / regionStep);
+            const predictions = new Array(cols * rows);
+
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    const x = Math.min(canvas.width - 1, col * regionStep + regionStep / 2);
+                    const y = Math.min(canvas.height - 1, row * regionStep + regionStep / 2);
+                    const predicted = predictClass(trainingState, x, y);
+                    predictions[row * cols + col] = predicted;
+
+                    if (predicted === null) continue;
+                    ctx.fillStyle = `${classDefs[predicted].color}20`;
+                    ctx.fillRect(col * regionStep, row * regionStep, regionStep + 1, regionStep + 1);
+                }
+            }
+
+            return { cols, rows, predictions };
+        }
+
+        function drawBoundariesFromGrid(grid) {
+            ctx.strokeStyle = '#111827';
+            ctx.lineWidth = 1.35;
+            ctx.beginPath();
+
+            for (let row = 0; row < grid.rows; row++) {
+                for (let col = 0; col < grid.cols; col++) {
+                    const current = grid.predictions[row * grid.cols + col];
+
+                    if (col < grid.cols - 1) {
+                        const right = grid.predictions[row * grid.cols + col + 1];
+                        if (current !== right) {
+                            const x = (col + 1) * regionStep;
+                            const y = row * regionStep;
+                            ctx.moveTo(x, y);
+                            ctx.lineTo(x, y + regionStep);
+                        }
+                    }
+
+                    if (row < grid.rows - 1) {
+                        const bottom = grid.predictions[(row + 1) * grid.cols + col];
+                        if (current !== bottom) {
+                            const x = col * regionStep;
+                            const y = (row + 1) * regionStep;
+                            ctx.moveTo(x, y);
+                            ctx.lineTo(x + regionStep, y);
+                        }
+                    }
+                }
+            }
+
+            ctx.stroke();
+        }
+
+        function drawPoint(point) {
+            ctx.fillStyle = showColors ? classDefs[point.label].color : '#000';
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const trainingState = getTrainingState();
+
+            if (showColors && trainingState.activeClasses.length > 0) {
+                const grid = drawRegions(trainingState);
+                drawBoundariesFromGrid(grid);
+            }
+
+            points.forEach(drawPoint);
+        }
+
+        canvas.addEventListener('click', event => {
+            const rect = canvas.getBoundingClientRect();
+            points.push({
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top,
+                label: activeClass
+            });
+            render();
+        });
+
+        toggleBtn.addEventListener('click', () => {
+            showColors = !showColors;
+            toggleBtn.textContent = showColors ? 'Farben ausblenden' : 'Farben anzeigen';
+            render();
+        });
+
+        resetBtn.addEventListener('click', () => {
+            points = [];
+            render();
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+
+        createPalette();
+        resizeCanvas();
+    </script>
+</body>
+
+</html>
